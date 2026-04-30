@@ -1,46 +1,44 @@
 package com.quizhelper.app
 
-import android.os.Environment
+import android.content.Context
 import java.io.File
 import java.io.FileWriter
 import java.text.SimpleDateFormat
 import java.util.*
 
 object Logger {
-    private const val TAG = "QuizHelper"
     private var logFile: File? = null
     private val sdf = SimpleDateFormat("yyyy-MM-dd HH:mm:ss.SSS", Locale.getDefault())
 
-    fun init() {
+    fun init(context: Context) {
         try {
-            val dir = File(Environment.getExternalStorageDirectory(), "QuizHelper/logs")
+            val dir = File(context.getExternalFilesDir(null), "logs")
             if (!dir.exists()) dir.mkdirs()
             logFile = File(dir, "quiz_helper_${System.currentTimeMillis()}.log")
             logFile?.createNewFile()
-            i("Logger", "Log file: ${logFile?.absolutePath}")
+            android.util.Log.i("QuizHelper", "Log file: ${logFile?.absolutePath}")
+            i("Logger", "Log started at ${logFile?.absolutePath}")
         } catch (e: Exception) {
-            android.util.Log.e(TAG, "Failed to create log file", e)
+            android.util.Log.e("QuizHelper", "Failed to create log file", e)
         }
     }
 
-    private fun log(tag: String, msg: String) {
+    private fun write(tag: String, msg: String) {
         val line = "${sdf.format(Date())} [$tag] $msg"
-        android.util.Log.d(TAG, line)
+        android.util.Log.d("QuizHelper", line)
         try {
-            logFile?.appendText("${line}\n")
+            logFile?.appendText("$line\n")
         } catch (_: Exception) {}
     }
 
-    fun i(tag: String, msg: String) = log(tag, msg)
+    fun i(tag: String, msg: String) = write(tag, msg)
 
     fun e(tag: String, msg: String, t: Throwable? = null) {
-        val line = "${sdf.format(Date())} [$tag] ERROR: $msg${if (t != null) " | ${t.message}" else ""}"
-        android.util.Log.e(TAG, line, t)
-        try {
-            logFile?.appendText("${line}\n")
-            t?.let { logFile?.appendText("${android.util.Log.getStackTraceString(it)}\n") }
-        } catch (_: Exception) {}
+        write(tag, "ERROR: $msg${if (t != null) " | ${t.message}" else ""}")
+        t?.let {
+            try {
+                logFile?.appendText("${android.util.Log.getStackTraceString(it)}\n")
+            } catch (_: Exception) {}
+        }
     }
-
-    fun getLogPath(): String = logFile?.absolutePath ?: "N/A"
 }
