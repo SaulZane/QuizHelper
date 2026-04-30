@@ -83,15 +83,20 @@ class FloatingButtonService : Service() {
         
         try {
             val mgr = getSystemService(Context.MEDIA_PROJECTION_SERVICE) as MediaProjectionManager
-            mediaProjection = mgr.getMediaProjection(MediaProjectionHolder.resultCode, MediaProjectionHolder.data)
-            mediaProjection?.registerCallback(object : MediaProjection.Callback() {
-                override fun onStop() {
-                    Logger.i("Service", "MediaProjection stopped")
-                    mediaProjection = null
-                    MediaProjectionHolder.clear()
-                }
-            }, handler)
-            Logger.i("Service", "MediaProjection created successfully")
+            val data = MediaProjectionHolder.data
+            if (data != null) {
+                mediaProjection = mgr.getMediaProjection(MediaProjectionHolder.resultCode, data)
+                mediaProjection?.registerCallback(object : MediaProjection.Callback() {
+                    override fun onStop() {
+                        Logger.i("Service", "MediaProjection stopped")
+                        mediaProjection = null
+                        MediaProjectionHolder.clear()
+                    }
+                }, handler)
+                Logger.i("Service", "MediaProjection created successfully")
+            } else {
+                Logger.e("Service", "MediaProjectionHolder.data is null")
+            }
         } catch (e: Exception) {
             Logger.e("Service", "Failed to create MediaProjection", e)
             MediaProjectionHolder.clear()

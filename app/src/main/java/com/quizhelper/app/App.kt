@@ -8,7 +8,7 @@ class App : Application() {
         Logger.init(this)
         Logger.i("App", "Application started")
         QuestionBank.load(this)
-        Logger.i("App", "QuestionBank loaded: ${QuestionBank.size()} questions")
+        Logger.i("App", "QuestionBank loaded: ${QuestionBank.questions.size} questions")
         
         Thread.setDefaultUncaughtExceptionHandler { thread, throwable ->
             Logger.e("App", "Uncaught exception", throwable)
