@@ -40,10 +40,12 @@ class FloatingButtonService : Service() {
     private var mediaProjection: MediaProjection? = null
     private var virtualDisplay: VirtualDisplay? = null
     private var isCapturing = false
+    private var isRequestingPermission = false
 
     private val permissionReceiver = object : BroadcastReceiver() {
         override fun onReceive(context: Context?, intent: Intent?) {
             Logger.i("Service", "Received permission granted broadcast")
+            isRequestingPermission = false
             if (MediaProjectionHolder.hasPermission) {
                 createMediaProjection()
             }
@@ -84,18 +86,27 @@ class FloatingButtonService : Service() {
         try {
             val mgr = getSystemService(Context.MEDIA_PROJECTION_SERVICE) as MediaProjectionManager
             val data = MediaProjectionHolder.data
-            if (data != null) {
-                mediaProjection = mgr.getMediaProjection(MediaProjectionHolder.resultCode, data)
-                mediaProjection?.registerCallback(object : MediaProjection.Callback() {
-                    override fun onStop() {
-                        Logger.i("Service", "MediaProjection stopped")
-                        mediaProjection = null
-                        MediaProjectionHolder.clear()
-                    }
-                }, handler)
-                Logger.i("Service", "MediaProjection created successfully")
+            val code = MediaProjectionHolder.resultCode
+            Logger.i("Service", "Creating projection: code=$code, hasData=${data != null}")
+            
+            if (data != null && code != 0) {
+                mediaProjection = mgr.getMediaProjection(code, data)
+                if (mediaProjection != null) {
+                    mediaProjection?.registerCallback(object : MediaProjection.Callback() {
+                        override fun onStop() {
+                            Logger.i("Service", "MediaProjection stopped by system")
+                            mediaProjection = null
+                            MediaProjectionHolder.clear()
+                        }
+                    }, handler)
+                    Logger.i("Service", "MediaProjection created successfully")
+                } else {
+                    Logger.e("Service", "getMediaProjection returned null")
+                    MediaProjectionHolder.clear()
+                }
             } else {
-                Logger.e("Service", "MediaProjectionHolder.data is null")
+                Logger.e("Service", "MediaProjectionHolder data is null or code is 0")
+                MediaProjectionHolder.clear()
             }
         } catch (e: Exception) {
             Logger.e("Service", "Failed to create MediaProjection", e)
@@ -156,14 +167,20 @@ class FloatingButtonService : Service() {
     }
 
     private fun onFloatingButtonClick() {
-        Logger.i("Service", "Button clicked, isCapturing=$isCapturing, hasProjection=${mediaProjection != null}")
+        Logger.i("Service", "Button clicked, isCapturing=$isCapturing, hasProjection=${mediaProjection != null}, isRequesting=$isRequestingPermission")
         
         if (isCapturing) {
             Logger.i("Service", "Already capturing, ignoring")
             return
         }
         
+        if (isRequestingPermission) {
+            Logger.i("Service", "Already requesting permission, ignoring")
+            return
+        }
+        
         if (mediaProjection != null) {
+            Logger.i("Service", "Using existing projection")
             captureScreen()
         } else if (MediaProjectionHolder.hasPermission) {
             Logger.i("Service", "Creating projection from holder")
@@ -171,7 +188,7 @@ class FloatingButtonService : Service() {
             if (mediaProjection != null) {
                 captureScreen()
             } else {
-                Logger.e("Service", "Failed to create projection from holder, requesting permission")
+                Logger.e("Service", "Failed to create projection, requesting permission")
                 requestPermission()
             }
         } else {
@@ -181,6 +198,12 @@ class FloatingButtonService : Service() {
     }
 
     private fun requestPermission() {
+        if (isRequestingPermission) {
+            Logger.i("Service", "Permission request already in progress")
+            return
+        }
+        isRequestingPermission = true
+        Logger.i("Service", "Starting CaptureActivity")
         val intent = Intent(this, CaptureActivity::class.java).apply {
             addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
         }

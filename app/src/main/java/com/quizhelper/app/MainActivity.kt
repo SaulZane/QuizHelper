@@ -1,12 +1,17 @@
 package com.quizhelper.app
 
+import android.Manifest
 import android.content.Intent
+import android.content.pm.PackageManager
 import android.net.Uri
 import android.os.Bundle
 import android.provider.Settings
 import androidx.appcompat.app.AppCompatActivity
+import androidx.core.content.ContextCompat
 
 class MainActivity : AppCompatActivity() {
+    private var permissionRequested = false
+    
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         Logger.i("MainActivity", "onCreate")
@@ -18,7 +23,30 @@ class MainActivity : AppCompatActivity() {
                 REQUEST_OVERLAY
             )
         } else {
-            Logger.i("MainActivity", "Overlay granted, starting service")
+            checkStoragePermission()
+        }
+    }
+
+    private fun checkStoragePermission() {
+        if (ContextCompat.checkSelfPermission(this, Manifest.permission.WRITE_EXTERNAL_STORAGE) 
+            != PackageManager.PERMISSION_GRANTED) {
+            Logger.i("MainActivity", "Requesting storage permission")
+            requestPermissions(arrayOf(Manifest.permission.WRITE_EXTERNAL_STORAGE), REQUEST_STORAGE)
+        } else {
+            Logger.i("MainActivity", "Storage permission granted, starting service")
+            startService()
+            finish()
+        }
+    }
+
+    override fun onRequestPermissionsResult(requestCode: Int, permissions: Array<out String>, grantResults: IntArray) {
+        super.onRequestPermissionsResult(requestCode, permissions, grantResults)
+        if (requestCode == REQUEST_STORAGE) {
+            if (grantResults.isNotEmpty() && grantResults[0] == PackageManager.PERMISSION_GRANTED) {
+                Logger.i("MainActivity", "Storage permission granted")
+            } else {
+                Logger.e("MainActivity", "Storage permission denied")
+            }
             startService()
             finish()
         }
@@ -29,11 +57,11 @@ class MainActivity : AppCompatActivity() {
         if (requestCode == REQUEST_OVERLAY) {
             if (Settings.canDrawOverlays(this)) {
                 Logger.i("MainActivity", "Overlay permission granted")
-                startService()
+                checkStoragePermission()
             } else {
                 Logger.e("MainActivity", "Overlay permission denied")
+                finish()
             }
-            finish()
         }
     }
 
@@ -43,5 +71,6 @@ class MainActivity : AppCompatActivity() {
 
     companion object {
         const val REQUEST_OVERLAY = 1001
+        const val REQUEST_STORAGE = 1002
     }
 }

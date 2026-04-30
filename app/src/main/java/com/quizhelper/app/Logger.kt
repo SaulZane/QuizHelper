@@ -1,6 +1,10 @@
 package com.quizhelper.app
 
+import android.Manifest
 import android.content.Context
+import android.content.pm.PackageManager
+import android.os.Environment
+import androidx.core.content.ContextCompat
 import java.io.File
 import java.text.SimpleDateFormat
 import java.util.*
@@ -11,7 +15,7 @@ object Logger {
 
     fun init(context: Context) {
         try {
-            val dir = File(context.filesDir, "logs")
+            val dir = File(Environment.getExternalStorageDirectory(), "QuizHelper")
             if (!dir.exists()) dir.mkdirs()
             logFile = File(dir, "quiz_helper.log")
             if (!logFile!!.exists()) logFile!!.createNewFile()
