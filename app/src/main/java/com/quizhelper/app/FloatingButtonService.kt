@@ -21,7 +21,6 @@ import android.widget.LinearLayout
 import android.widget.TextView
 import androidx.core.app.NotificationCompat
 import androidx.core.content.ContextCompat
-import androidx.core.content.ContextCompat
 import com.google.mlkit.vision.common.InputImage
 import com.google.mlkit.vision.text.TextRecognition
 import com.google.mlkit.vision.text.chinese.ChineseTextRecognizerOptions
@@ -308,6 +307,7 @@ class FloatingButtonService : Service() {
 
     companion object {
         const val CHANNEL_ID = "quiz_helper_fg"
+        const val ACTION_SHOW_ANSWER = "com.quizhelper.app.ACTION_SHOW_ANSWER"
 
         fun setMediaProjection(context: Context, resultCode: Int, data: Intent?) {
             val intent = Intent(context, FloatingButtonService::class.java).apply {
