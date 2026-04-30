@@ -7,13 +7,10 @@ import android.provider.Settings
 import androidx.appcompat.app.AppCompatActivity
 
 class MainActivity : AppCompatActivity() {
-
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        Logger.init(this)
-        Logger.i("MainActivity", "App started")
-        QuestionBank.load(this)
-
+        Logger.i("MainActivity", "onCreate")
+        
         if (!Settings.canDrawOverlays(this)) {
             Logger.i("MainActivity", "Requesting overlay permission")
             startActivityForResult(
@@ -21,7 +18,7 @@ class MainActivity : AppCompatActivity() {
                 REQUEST_OVERLAY
             )
         } else {
-            Logger.i("MainActivity", "Overlay permission already granted, starting service")
+            Logger.i("MainActivity", "Overlay granted, starting service")
             startService()
             finish()
         }

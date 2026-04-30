@@ -2,7 +2,6 @@ package com.quizhelper.app
 
 import android.content.Context
 import java.io.File
-import java.io.FileWriter
 import java.text.SimpleDateFormat
 import java.util.*
 
@@ -12,12 +11,11 @@ object Logger {
 
     fun init(context: Context) {
         try {
-            val dir = File(context.getExternalFilesDir(null), "logs")
+            val dir = File(context.filesDir, "logs")
             if (!dir.exists()) dir.mkdirs()
-            logFile = File(dir, "quiz_helper_${System.currentTimeMillis()}.log")
-            logFile?.createNewFile()
+            logFile = File(dir, "quiz_helper.log")
+            if (!logFile!!.exists()) logFile!!.createNewFile()
             android.util.Log.i("QuizHelper", "Log file: ${logFile?.absolutePath}")
-            i("Logger", "Log started at ${logFile?.absolutePath}")
         } catch (e: Exception) {
             android.util.Log.e("QuizHelper", "Failed to create log file", e)
         }

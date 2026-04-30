@@ -9,27 +9,33 @@ import android.view.WindowManager
 import androidx.appcompat.app.AppCompatActivity
 
 class CaptureActivity : AppCompatActivity() {
-
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        window.addFlags(
-            WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE or
-                    WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE
-        )
+        Logger.i("CaptureActivity", "onCreate")
+        window.addFlags(WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE or WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE)
         window.setDimAmount(0f)
         requestCapture()
     }
 
     private fun requestCapture() {
+        Logger.i("CaptureActivity", "Requesting MediaProjection permission")
         val mgr = getSystemService(Context.MEDIA_PROJECTION_SERVICE) as MediaProjectionManager
         startActivityForResult(mgr.createScreenCaptureIntent(), REQUEST_CAPTURE)
     }
 
     override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
         super.onActivityResult(requestCode, resultCode, data)
+        Logger.i("CaptureActivity", "onActivityResult: requestCode=$requestCode, resultCode=$resultCode, hasData=${data != null}")
+        
         if (requestCode == REQUEST_CAPTURE && resultCode == Activity.RESULT_OK && data != null) {
-            // 将 MediaProjection 实例传递给 Service，由 Service 保存和复用
-            FloatingButtonService.setMediaProjection(this, resultCode, data)
+            MediaProjectionHolder.save(resultCode, data)
+            Logger.i("CaptureActivity", "Permission saved, notifying service")
+            val intent = Intent(FloatingButtonService.ACTION_PERMISSION_GRANTED).apply {
+                setPackage(packageName)
+            }
+            sendBroadcast(intent)
+        } else {
+            Logger.e("CaptureActivity", "Permission denied or data null")
         }
         finish()
     }

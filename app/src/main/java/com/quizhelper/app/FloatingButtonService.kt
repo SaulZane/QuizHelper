@@ -11,7 +11,6 @@ import android.media.ImageReader
 import android.media.projection.MediaProjection
 import android.media.projection.MediaProjectionManager
 import android.os.*
-import android.util.DisplayMetrics
 import android.view.Gravity
 import android.view.MotionEvent
 import android.view.WindowManager
@@ -20,7 +19,6 @@ import android.widget.ImageView
 import android.widget.LinearLayout
 import android.widget.TextView
 import androidx.core.app.NotificationCompat
-import androidx.core.content.ContextCompat
 import com.google.mlkit.vision.common.InputImage
 import com.google.mlkit.vision.text.TextRecognition
 import com.google.mlkit.vision.text.chinese.ChineseTextRecognizerOptions
@@ -43,25 +41,61 @@ class FloatingButtonService : Service() {
     private var virtualDisplay: VirtualDisplay? = null
     private var isCapturing = false
 
+    private val permissionReceiver = object : BroadcastReceiver() {
+        override fun onReceive(context: Context?, intent: Intent?) {
+            Logger.i("Service", "Received permission granted broadcast")
+            if (MediaProjectionHolder.hasPermission) {
+                createMediaProjection()
+            }
+        }
+    }
+
     override fun onBind(intent: Intent?): IBinder? = null
 
     override fun onCreate() {
         super.onCreate()
-        QuestionBank.load(this)
+        Logger.i("Service", "onCreate")
+        
         createNotificationChannel()
         startForeground(1, NotificationCompat.Builder(this, CHANNEL_ID)
             .setContentTitle("Quiz Helper")
-            .setContentText("Floating button active")
+            .setContentText("悬浮按钮已启动")
             .setSmallIcon(android.R.drawable.ic_menu_camera)
             .setPriority(NotificationCompat.PRIORITY_LOW)
-            .setContentIntent(PendingIntent.getActivity(
-                this, 0, Intent(this, MainActivity::class.java),
-                PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT
-            ))
             .build())
 
         windowManager = getSystemService(WINDOW_SERVICE) as WindowManager
         createFloatingButton()
+        
+        registerReceiver(permissionReceiver, IntentFilter(ACTION_PERMISSION_GRANTED), RECEIVER_NOT_EXPORTED)
+        
+        if (MediaProjectionHolder.hasPermission) {
+            Logger.i("Service", "Permission already exists, creating projection")
+            createMediaProjection()
+        }
+    }
+
+    private fun createMediaProjection() {
+        if (mediaProjection != null) {
+            Logger.i("Service", "MediaProjection already exists")
+            return
+        }
+        
+        try {
+            val mgr = getSystemService(Context.MEDIA_PROJECTION_SERVICE) as MediaProjectionManager
+            mediaProjection = mgr.getMediaProjection(MediaProjectionHolder.resultCode, MediaProjectionHolder.data)
+            mediaProjection?.registerCallback(object : MediaProjection.Callback() {
+                override fun onStop() {
+                    Logger.i("Service", "MediaProjection stopped")
+                    mediaProjection = null
+                    MediaProjectionHolder.clear()
+                }
+            }, handler)
+            Logger.i("Service", "MediaProjection created successfully")
+        } catch (e: Exception) {
+            Logger.e("Service", "Failed to create MediaProjection", e)
+            MediaProjectionHolder.clear()
+        }
     }
 
     private fun createFloatingButton() {
@@ -71,24 +105,13 @@ class FloatingButtonService : Service() {
                 setColorFilter(android.graphics.Color.WHITE)
                 setPadding(20, 20, 20, 20)
             }
-            addView(btnView, FrameLayout.LayoutParams(
-                FrameLayout.LayoutParams.MATCH_PARENT,
-                FrameLayout.LayoutParams.MATCH_PARENT
-            ))
+            addView(btnView, FrameLayout.LayoutParams(FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.MATCH_PARENT))
             setBackgroundColor(android.graphics.Color.argb(200, 76, 175, 80))
-            val radius = 60f
-            val shape = android.graphics.drawable.GradientDrawable().apply {
-                shape = android.graphics.drawable.GradientDrawable.OVAL
-                setColor(android.graphics.Color.argb(200, 76, 175, 80))
-            }
-            background = shape
         }
 
         overlayParams = WindowManager.LayoutParams(
             120, 120,
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O)
-                WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY
-            else WindowManager.LayoutParams.TYPE_PHONE,
+            WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY,
             WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE,
             PixelFormat.TRANSLUCENT
         ).apply {
@@ -128,36 +151,45 @@ class FloatingButtonService : Service() {
     }
 
     private fun onFloatingButtonClick() {
-        if (isCapturing) return
+        Logger.i("Service", "Button clicked, isCapturing=$isCapturing, hasProjection=${mediaProjection != null}")
+        
+        if (isCapturing) {
+            Logger.i("Service", "Already capturing, ignoring")
+            return
+        }
+        
         if (mediaProjection != null) {
             captureScreen()
-        } else {
-            val intent = Intent(this, CaptureActivity::class.java).apply {
-                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+        } else if (MediaProjectionHolder.hasPermission) {
+            Logger.i("Service", "Creating projection from holder")
+            createMediaProjection()
+            if (mediaProjection != null) {
+                captureScreen()
+            } else {
+                Logger.e("Service", "Failed to create projection from holder, requesting permission")
+                requestPermission()
             }
-            startActivity(intent)
+        } else {
+            Logger.i("Service", "No permission, requesting")
+            requestPermission()
         }
     }
 
-    fun handleMediaProjectionResult(resultCode: Int, data: Intent?) {
-        if (resultCode == Activity.RESULT_OK && data != null) {
-            val mgr = getSystemService(Context.MEDIA_PROJECTION_SERVICE) as MediaProjectionManager
-            mediaProjection = mgr.getMediaProjection(resultCode, data)
-            mediaProjection?.registerCallback(object : MediaProjection.Callback() {
-                override fun onStop() {
-                    mediaProjection = null
-                    super.onStop()
-                }
-            }, handler)
-            handler.postDelayed({ captureScreen() }, 300)
-        } else {
-            showAnswerOverlay("Permission denied", "Screen capture permission required")
+    private fun requestPermission() {
+        val intent = Intent(this, CaptureActivity::class.java).apply {
+            addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
         }
+        startActivity(intent)
     }
 
     private fun captureScreen() {
-        if (isCapturing) return
+        if (isCapturing || mediaProjection == null) {
+            Logger.e("Service", "Cannot capture: isCapturing=$isCapturing, hasProjection=${mediaProjection != null}")
+            return
+        }
+        
         isCapturing = true
+        Logger.i("Service", "Starting capture")
 
         val metrics = resources.displayMetrics
         val w = metrics.widthPixels
@@ -166,7 +198,6 @@ class FloatingButtonService : Service() {
 
         try {
             val reader = ImageReader.newInstance(w, h, PixelFormat.RGBA_8888, 2)
-
             virtualDisplay = mediaProjection?.createVirtualDisplay(
                 "quiz_capture", w, h, dpi,
                 DisplayManager.VIRTUAL_DISPLAY_FLAG_AUTO_MIRROR,
@@ -177,10 +208,9 @@ class FloatingButtonService : Service() {
                 try {
                     val image = reader.acquireLatestImage()
                     if (image != null) {
-                        val planes = image.planes
-                        val buffer = planes[0].buffer
-                        val pixelStride = planes[0].pixelStride
-                        val rowStride = planes[0].rowStride
+                        val buffer = image.planes[0].buffer
+                        val pixelStride = image.planes[0].pixelStride
+                        val rowStride = image.planes[0].rowStride
                         val rowPadding = rowStride - pixelStride * w
 
                         val bitmap = Bitmap.createBitmap(w + rowPadding / pixelStride, h, Bitmap.Config.ARGB_8888)
@@ -188,35 +218,43 @@ class FloatingButtonService : Service() {
                         val croppedBitmap = Bitmap.createBitmap(bitmap, 0, 0, w, h)
                         bitmap.recycle()
                         image.close()
+                        Logger.i("Service", "Image captured: ${croppedBitmap.width}x${croppedBitmap.height}")
                         runOCR(croppedBitmap)
                     } else {
-                        showAnswerOverlay("Capture failed", "No image acquired. Try again.")
+                        Logger.e("Service", "No image from reader")
+                        showAnswer("截图失败", "未获取到图像，请重试")
                         isCapturing = false
                     }
                 } catch (e: Exception) {
-                    showAnswerOverlay("Capture error", e.message ?: "Unknown error")
+                    Logger.e("Service", "Capture error", e)
+                    showAnswer("截图错误", e.message ?: "未知错误")
                     isCapturing = false
                 }
                 cleanupDisplay()
             }, 500)
         } catch (e: Exception) {
-            showAnswerOverlay("Capture error", e.message ?: "Unknown error")
+            Logger.e("Service", "Setup error", e)
+            showAnswer("设置错误", e.message ?: "未知错误")
             isCapturing = false
         }
     }
 
     private fun runOCR(bitmap: Bitmap) {
+        Logger.i("Service", "Running OCR")
         val inputImage = InputImage.fromBitmap(bitmap, 0)
         val recognizer = TextRecognition.getClient(ChineseTextRecognizerOptions.Builder().build())
 
         recognizer.process(inputImage)
             .addOnSuccessListener { visionText ->
+                Logger.i("Service", "OCR success, text length: ${visionText.text.length}")
                 val result = QuestionBank.findBestMatch(visionText.text)
-                showAnswerOverlay(result.first, result.second)
+                Logger.i("Service", "Match result: ${result.first} | ${result.second}")
+                showAnswer(result.first, result.second)
                 isCapturing = false
             }
             .addOnFailureListener { e ->
-                showAnswerOverlay("OCR Failed", e.message ?: "Unknown error")
+                Logger.e("Service", "OCR failed", e)
+                showAnswer("OCR失败", e.message ?: "未知错误")
                 isCapturing = false
             }
     }
@@ -226,16 +264,13 @@ class FloatingButtonService : Service() {
         virtualDisplay = null
     }
 
-    private fun showAnswerOverlay(title: String, answer: String) {
+    private fun showAnswer(title: String, answer: String) {
         handler.post {
-            dismissAnswerOverlay()
-
+            dismissAnswer()
             answerOverlay = LinearLayout(this).apply {
                 orientation = LinearLayout.VERTICAL
-                setBackgroundColor(android.graphics.Color.argb(220, 30, 30, 30))
+                setBackgroundColor(android.graphics.Color.argb(230, 20, 20, 20))
                 setPadding(32, 24, 32, 24)
-                setOnClickListener { dismissAnswerOverlay() }
-
                 addView(TextView(context).apply {
                     text = title
                     textSize = 13f
@@ -248,83 +283,47 @@ class FloatingButtonService : Service() {
                     setTypeface(null, android.graphics.Typeface.BOLD)
                 })
             }
-
             answerParams = WindowManager.LayoutParams(
                 WindowManager.LayoutParams.MATCH_PARENT,
                 WindowManager.LayoutParams.WRAP_CONTENT,
-                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O)
-                    WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY
-                else WindowManager.LayoutParams.TYPE_PHONE,
-                WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or
-                        WindowManager.LayoutParams.FLAG_NOT_TOUCH_MODAL,
+                WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY,
+                WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or WindowManager.LayoutParams.FLAG_NOT_TOUCH_MODAL,
                 PixelFormat.TRANSLUCENT
             ).apply {
                 gravity = Gravity.BOTTOM or Gravity.CENTER_HORIZONTAL
-                y = 80
+                y = 100
             }
-
             windowManager?.addView(answerOverlay, answerParams)
-
-            var alpha = 1f
-            val animator = ValueAnimator.ofFloat(1f, 0f).apply {
-                duration = 3000
-                startDelay = 6000
-                addUpdateListener {
-                    alpha = it.animatedValue as Float
-                    answerOverlay?.alpha = alpha
-                }
-            }
-            animator.start()
-            handler.postDelayed({ dismissAnswerOverlay() }, 10000)
+            handler.postDelayed({ dismissAnswer() }, 8000)
         }
     }
 
-    private fun dismissAnswerOverlay() {
-        answerOverlay?.let { v ->
-            try { windowManager?.removeView(v) } catch (_: Exception) {}
-        }
+    private fun dismissAnswer() {
+        answerOverlay?.let { try { windowManager?.removeView(it) } catch (_: Exception) {} }
         answerOverlay = null
     }
 
     override fun onDestroy() {
+        Logger.i("Service", "onDestroy")
         handler.removeCallbacksAndMessages(null)
+        unregisterReceiver(permissionReceiver)
         cleanupDisplay()
         mediaProjection?.stop()
         mediaProjection = null
         floatingView?.let { try { windowManager?.removeView(it) } catch (_: Exception) {} }
-        dismissAnswerOverlay()
+        dismissAnswer()
         super.onDestroy()
     }
 
     private fun createNotificationChannel() {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-            val channel = NotificationChannel(
-                CHANNEL_ID, "Quiz Helper", NotificationManager.IMPORTANCE_LOW
-            )
+            val channel = NotificationChannel(CHANNEL_ID, "Quiz Helper", NotificationManager.IMPORTANCE_LOW)
             getSystemService(NotificationManager::class.java).createNotificationChannel(channel)
         }
     }
 
     companion object {
         const val CHANNEL_ID = "quiz_helper_fg"
-        const val ACTION_SHOW_ANSWER = "com.quizhelper.app.ACTION_SHOW_ANSWER"
-
-        fun setMediaProjection(context: Context, resultCode: Int, data: Intent?) {
-            val intent = Intent(context, FloatingButtonService::class.java).apply {
-                action = "SET_MEDIA_PROJECTION"
-                putExtra("resultCode", resultCode)
-                putExtra("data", data)
-            }
-            ContextCompat.startForegroundService(context, intent)
-        }
-    }
-
-    override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
-        if (intent?.action == "SET_MEDIA_PROJECTION") {
-            val resultCode = intent.getIntExtra("resultCode", Activity.RESULT_CANCELED)
-            val data = intent.getParcelableExtra<Intent>("data")
-            handleMediaProjectionResult(resultCode, data)
-        }
-        return START_STICKY
+        const val ACTION_PERMISSION_GRANTED = "com.quizhelper.app.PERMISSION_GRANTED"
     }
 }
