@@ -6,14 +6,12 @@ import android.content.Intent
 import android.media.projection.MediaProjectionManager
 import android.os.Bundle
 import android.view.WindowManager
-import androidx.appcompat.app.AppCompatActivity
 
-class CaptureActivity : AppCompatActivity() {
+class CaptureActivity : Activity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         Logger.i("CaptureActivity", "onCreate")
         window.addFlags(WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE or WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE)
-        window.setDimAmount(0f)
         requestCapture()
     }
 
@@ -27,7 +25,7 @@ class CaptureActivity : AppCompatActivity() {
         super.onActivityResult(requestCode, resultCode, data)
         Logger.i("CaptureActivity", "onActivityResult: requestCode=$requestCode, resultCode=$resultCode, hasData=${data != null}")
         
-        if (requestCode == REQUEST_CAPTURE && resultCode == Activity.RESULT_OK && data != null) {
+        if (requestCode == REQUEST_CAPTURE && resultCode == RESULT_OK && data != null) {
             MediaProjectionHolder.save(resultCode, data)
             Logger.i("CaptureActivity", "Permission saved, notifying service")
             val intent = Intent(FloatingButtonService.ACTION_PERMISSION_GRANTED).apply {
