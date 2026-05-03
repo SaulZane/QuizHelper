@@ -28,13 +28,16 @@ class FloatingButtonService : Service() {
     private var windowManager: WindowManager? = null
     private var floatingView: FrameLayout? = null
     private var answerOverlay: LinearLayout? = null
+    private var emergencyButton: android.view.View? = null
     private var overlayParams: WindowManager.LayoutParams? = null
     private var answerParams: WindowManager.LayoutParams? = null
+    private var emergencyParams: WindowManager.LayoutParams? = null
     private var initialX = 0
     private var initialY = 0
     private var initialTouchX = 0f
     private var initialTouchY = 0f
     private var isDragging = false
+    private var isHidden = false
     private val handler = Handler(Looper.getMainLooper())
 
     private var mediaProjection: MediaProjection? = null
@@ -68,6 +71,7 @@ class FloatingButtonService : Service() {
 
         windowManager = getSystemService(WINDOW_SERVICE) as WindowManager
         createFloatingButton()
+        createEmergencyButton()
         
         registerReceiver(permissionReceiver, IntentFilter(ACTION_PERMISSION_GRANTED), RECEIVER_NOT_EXPORTED)
         
@@ -294,19 +298,20 @@ class FloatingButtonService : Service() {
 
     private fun showAnswer(title: String, answer: String) {
         handler.post {
+            if (isHidden) return@post
             dismissAnswer()
             answerOverlay = LinearLayout(this).apply {
                 orientation = LinearLayout.VERTICAL
-                setBackgroundColor(android.graphics.Color.argb(230, 20, 20, 20))
+                setBackgroundColor(android.graphics.Color.TRANSPARENT)
                 setPadding(32, 24, 32, 24)
                 addView(TextView(context).apply {
                     text = title
-                    textSize = 13f
+                    textSize = 10f
                     setTextColor(android.graphics.Color.parseColor("#AAAAAA"))
                 })
                 addView(TextView(context).apply {
                     text = answer
-                    textSize = 20f
+                    textSize = 13f
                     setTextColor(android.graphics.Color.parseColor("#4CAF50"))
                     setTypeface(null, android.graphics.Typeface.BOLD)
                 })
@@ -322,13 +327,47 @@ class FloatingButtonService : Service() {
                 y = 100
             }
             windowManager?.addView(answerOverlay, answerParams)
-            handler.postDelayed({ dismissAnswer() }, 8000)
+            handler.postDelayed({ dismissAnswer() }, 3000)
         }
     }
 
     private fun dismissAnswer() {
         answerOverlay?.let { try { windowManager?.removeView(it) } catch (_: Exception) {} }
         answerOverlay = null
+    }
+
+    private fun createEmergencyButton() {
+        emergencyButton = android.view.View(this).apply {
+            setBackgroundColor(android.graphics.Color.TRANSPARENT)
+        }
+        emergencyParams = WindowManager.LayoutParams(
+            240, 160,
+            WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY,
+            WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or WindowManager.LayoutParams.FLAG_NOT_TOUCH_MODAL,
+            PixelFormat.TRANSLUCENT
+        ).apply {
+            gravity = Gravity.TOP or Gravity.CENTER_HORIZONTAL
+            x = 0
+            y = 0
+        }
+        emergencyButton?.setOnClickListener {
+            Logger.i("Service", "Emergency button clicked")
+            toggleHidden()
+        }
+        windowManager?.addView(emergencyButton, emergencyParams)
+    }
+
+    private fun toggleHidden() {
+        isHidden = !isHidden
+        Logger.i("Service", "toggleHidden: isHidden=$isHidden")
+        if (isHidden) {
+            floatingView?.let { try { windowManager?.removeView(it) } catch (_: Exception) {} }
+            dismissAnswer()
+        } else {
+            floatingView?.let {
+                try { windowManager?.addView(it, overlayParams) } catch (_: Exception) {}
+            }
+        }
     }
 
     override fun onDestroy() {
@@ -339,6 +378,7 @@ class FloatingButtonService : Service() {
         mediaProjection?.stop()
         mediaProjection = null
         floatingView?.let { try { windowManager?.removeView(it) } catch (_: Exception) {} }
+        emergencyButton?.let { try { windowManager?.removeView(it) } catch (_: Exception) {} }
         dismissAnswer()
         super.onDestroy()
     }
