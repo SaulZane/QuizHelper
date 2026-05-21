@@ -280,8 +280,19 @@ class FloatingButtonService : Service() {
             .addOnSuccessListener { visionText ->
                 Logger.i("Service", "OCR success, text length: ${visionText.text.length}")
                 val result = QuestionBank.findBestMatch(visionText.text)
-                Logger.i("Service", "Match result: ${result.first} | ${result.second}")
-                showAnswer(result.first, result.second)
+                val matched = result.question
+                if (matched != null) {
+                    val typeLabel = when (result.matchedType) {
+                        QuestionBank.QuestionType.TF -> "判断题"
+                        QuestionBank.QuestionType.MULTI -> "多选题"
+                        else -> "单选题"
+                    }
+                    Logger.i("Service", "Match: Q${matched.number} type=$typeLabel score=${"%.0f".format(result.score * 100)}%")
+                    showAnswer("Q${matched.number} $typeLabel (${"%.0f".format(result.score * 100)}%)", "答案: ${matched.answer}")
+                } else {
+                    Logger.i("Service", "No match found, score=${result.score}")
+                    showAnswer("未匹配", "未找到对应题目")
+                }
                 isCapturing = false
             }
             .addOnFailureListener { e ->
