@@ -27,20 +27,146 @@ object QuestionBank {
 
     @JvmStatic
     fun classifyQuestion(q: Question): QuestionType {
+        // 优先使用题库中显式声明的题型
+        when (q.type) {
+            "TF" -> return QuestionType.TF
+            "MULTI" -> return QuestionType.MULTI
+            "SINGLE" -> return QuestionType.SINGLE
+        }
         val values = q.options.values.map { it.trim() }.toSet()
         val isTF = q.options.size == 2 && (
             (values.contains("正确") && values.contains("错误")) ||
-            (values.contains("对") && values.contains("错"))
+            (values.contains("对") && values.contains("错")) ||
+            (values.contains("是") && values.contains("否"))
         )
         if (isTF) return QuestionType.TF
         if (q.answer.length >= 2) return QuestionType.MULTI
         return QuestionType.SINGLE
     }
 
+    /** 判断题同义词组：屏幕上可能显示 是/否，也可能是 正确/错误、对/错、√/× */
+    private val TF_TRUE = setOf("是", "正确", "对", "√", "对的", "正确的")
+    private val TF_FALSE = setOf("否", "错误", "错", "×", "x", "不对", "错误的")
+
+    private fun tfGroupOf(s: String): Int {
+        val t = normalize(s)
+        if (TF_TRUE.any { normalize(it) == t }) return 1
+        if (TF_FALSE.any { normalize(it) == t }) return -1
+        return 0
+    }
+
+    /**
+     * 从 OCR 文本中解析出屏幕上实际显示的选项：字母 -> 选项文本。
+     * 支持 A、 A. A) A: 等多种分隔符，以及跨行排版。
+     */
+    @JvmStatic
+    fun parseOcrOptions(ocr: String): Map<String, String> {
+        val result = LinkedHashMap<String, String>()
+        // 找出所有 "字母+分隔符" 的位置，相邻两个之间的内容即为该选项文本
+        val marker = Regex("""(?:^|[\n\r\s。？！；;，,(（【\[])([A-Ha-h])\s*[、.．。)）:：\]】]\s*""")
+        val hits = marker.findAll(ocr).toList()
+        for ((i, m) in hits.withIndex()) {
+            val letter = m.groupValues[1].uppercase()
+            if (result.containsKey(letter)) continue
+            val start = m.range.last + 1
+            val end = if (i + 1 < hits.size) hits[i + 1].range.first else ocr.length
+            if (start >= end) continue
+            val content = ocr.substring(start, end)
+                .trim()
+                .trim('、', '.', '．', '。', ')', '）', ':', '：', ',', '，', ';', '；')
+                .trim()
+            if (content.isNotEmpty()) result[letter] = content
+        }
+        return result
+    }
+
+    /**
+     * 选项专用相似度。与题干匹配不同，选项之间常存在互为子串的强干扰
+     * （如「机动车」vs「非机动车」、「国家安全观」vs「总体国家安全观」），
+     * 因此完全相等优先，子串不再短路为高分，并按长度差惩罚。
+     */
+    @JvmStatic
+    fun optionSimilarity(answerText: String, screenText: String): Double {
+        val a = normalize(answerText)
+        val b = normalize(screenText)
+        if (a.isEmpty() || b.isEmpty()) return 0.0
+        if (a == b) return 1.0
+        val lenRatio = minOf(a.length, b.length).toDouble() / maxOf(a.length, b.length)
+        val base = maxOf(lcsRatio(a, b), bigramJaccard(a, b))
+        // 长度差越大越可能是“子串型”干扰项，按比例压低得分
+        return base * lenRatio
+    }
+
+    /**
+     * 核心：用「答案文本」反查当前屏幕上对应的选项字母。
+     * 选项顺序被打乱也能得到正确字母；无法解析屏幕选项时返回 null 由调用方降级。
+     */
+    @JvmStatic
+    fun resolveLettersByText(q: Question, ocr: String): String? {
+        val answerTexts = if (q.answerTexts.isNotEmpty()) q.answerTexts
+                          else q.answer.mapNotNull { q.options[it.toString()] }
+        if (answerTexts.isEmpty()) return null
+
+        val screen = parseOcrOptions(ocr)
+        if (screen.isEmpty()) return null
+
+        val isTF = classifyQuestion(q) == QuestionType.TF
+        val letters = sortedSetOf<String>()
+
+        val used = HashSet<String>()
+        for (ansText in answerTexts) {
+            var bestLetter: String? = null
+            var bestScore = 0.0
+            for ((letter, screenText) in screen) {
+                if (letter in used) continue   // 一个屏幕选项只能被认领一次
+                val score = if (isTF) {
+                    // 判断题按语义分组匹配，兼容 是/否 与 正确/错误 混用
+                    val g1 = tfGroupOf(ansText)
+                    val g2 = tfGroupOf(screenText)
+                    if (g1 != 0 && g1 == g2) 1.0 else optionSimilarity(ansText, screenText)
+                } else {
+                    optionSimilarity(ansText, screenText)
+                }
+                if (score > bestScore) { bestScore = score; bestLetter = letter }
+            }
+            // 阈值偏低以容忍 OCR 误字，但过低说明该选项没出现在屏幕上
+            if (bestLetter != null && bestScore >= 0.45) {
+                used.add(bestLetter)
+                letters.add(bestLetter)
+            } else {
+                Logger.i("QuestionBank", "resolveLetters: 未匹配到选项 '$ansText' (best=$bestScore)")
+            }
+        }
+
+        if (letters.isEmpty()) return null
+        if (letters.size != answerTexts.size) {
+            Logger.i("QuestionBank", "resolveLetters: 部分匹配 ${letters.size}/${answerTexts.size}")
+        }
+        return letters.joinToString("")
+    }
+
+    /** 生成最终展示的答案字符串：优先按屏幕实际顺序给字母，并附上答案文本 */
+    @JvmStatic
+    fun formatAnswer(q: Question, ocr: String): String {
+        val resolved = resolveLettersByText(q, ocr)
+        val texts = if (q.answerTexts.isNotEmpty()) q.answerTexts
+                    else q.answer.mapNotNull { q.options[it.toString()] }
+        return when {
+            resolved != null -> {
+                if (resolved != q.answer) {
+                    Logger.i("QuestionBank", "选项乱序: 题库答案=${q.answer} -> 屏幕答案=$resolved")
+                }
+                if (texts.isEmpty()) resolved else "$resolved  ${texts.joinToString(" / ")}"
+            }
+            texts.isNotEmpty() -> texts.joinToString(" / ")   // 解析不到屏幕选项时只给文本，避免给错字母
+            else -> q.answer
+        }
+    }
+
     @JvmStatic
     fun detectTypeHint(ocr: String): QuestionType? {
-        val tfTrue = Regex("""(?:^|[\n\r\s。？！(（])[A-D]\s*[、.．)）:：]?\s*正\s*确""")
-        val tfFalse = Regex("""(?:^|[\n\r\s。？！(（])[A-D]\s*[、.．)）:：]?\s*错\s*误""")
+        val tfTrue = Regex("""(?:^|[\n\r\s。？！(（])[A-D]\s*[、.．)）:：]?\s*(?:正\s*确|是)(?:\s|$|[\n\r])""")
+        val tfFalse = Regex("""(?:^|[\n\r\s。？！(（])[A-D]\s*[、.．)）:：]?\s*(?:错\s*误|否)(?:\s|$|[\n\r])""")
         if (tfTrue.containsMatchIn(ocr) || tfFalse.containsMatchIn(ocr)) return QuestionType.TF
 
         val multiKeywords = listOf("正确的有", "错误的有", "下列哪些", "下面哪些", "包括哪些", "下列各项中")
@@ -187,5 +313,7 @@ data class Question(
     val number: Int,
     val text: String,
     val options: Map<String, String>,
-    val answer: String
+    val answer: String,
+    val answerTexts: List<String> = emptyList(),
+    val type: String? = null
 )

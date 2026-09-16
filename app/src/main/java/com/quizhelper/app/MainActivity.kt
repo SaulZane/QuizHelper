@@ -126,7 +126,8 @@ class MainActivity : AppCompatActivity() {
                         runOnUiThread {
                             val matched = result.question
                             if (matched != null) {
-                                tvAnswer.text = matched.answer
+                                // 按屏幕实际选项顺序解析答案，避免选项乱序导致字母错位
+                                tvAnswer.text = QuestionBank.formatAnswer(matched, visionText.text)
                                 tvAnswer.setTextColor(0xFF4CAF50.toInt())
                             } else {
                                 tvAnswer.text = "-"

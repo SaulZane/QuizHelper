@@ -288,7 +288,8 @@ class FloatingButtonService : Service() {
                         else -> "单选题"
                     }
                     Logger.i("Service", "Match: Q${matched.number} type=$typeLabel score=${"%.0f".format(result.score * 100)}%")
-                    showAnswer("Q${matched.number} $typeLabel (${"%.0f".format(result.score * 100)}%)", "答案: ${matched.answer}")
+                    val shown = QuestionBank.formatAnswer(matched, visionText.text)
+                    showAnswer("Q${matched.number} $typeLabel (${"%.0f".format(result.score * 100)}%)", "答案: $shown")
                 } else {
                     Logger.i("Service", "No match found, score=${result.score}")
                     showAnswer("未匹配", "未找到对应题目")
