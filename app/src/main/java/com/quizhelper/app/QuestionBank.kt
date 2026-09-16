@@ -181,8 +181,37 @@ object QuestionBank {
         return q.answer
     }
 
+    /**
+     * 识别答题界面开头的题型标签，如 [单选] [多选] [判断]、【单选题】、(多选) 等。
+     * 这是最可靠的题型信号，优先级高于任何关键词猜测。
+     */
     @JvmStatic
+    fun detectTypeLabel(ocr: String): QuestionType? {
+        // 只看开头部分，避免题干或选项里出现这些字造成误判
+        val head = ocr.take(60)
+        val label = Regex("""[\[\【(（]?\s*(单选|多选|不定项|判断|是非)\s*(?:题)?\s*[\]\】)）]?""")
+            .find(head)?.groupValues?.get(1) ?: return null
+        return when (label) {
+            "单选" -> QuestionType.SINGLE
+            "多选", "不定项" -> QuestionType.MULTI
+            "判断", "是非" -> QuestionType.TF
+            else -> null
+        }
+    }
+
+    /** 去掉开头的题型标签与题号，避免它们参与题干相似度计算 */
+    @JvmStatic
+    fun stripTypeLabel(ocr: String): String {
+        var s = ocr
+        s = Regex("""^\s*[\[\【(（]?\s*(?:单选|多选|不定项|判断|是非)\s*(?:题)?\s*[\]\】)）]?\s*""")
+            .replace(s, "")
+        return s.trimStart()
+    }
+
     fun detectTypeHint(ocr: String): QuestionType? {
+        // 界面上的题型标签最可信，优先采用
+        detectTypeLabel(ocr)?.let { return it }
+
         val tfTrue = Regex("""(?:^|[\n\r\s。？！(（])[A-D]\s*[、.．)）:：]?\s*(?:正\s*确|是)(?:\s|$|[\n\r])""")
         val tfFalse = Regex("""(?:^|[\n\r\s。？！(（])[A-D]\s*[、.．)）:：]?\s*(?:错\s*误|否)(?:\s|$|[\n\r])""")
         if (tfTrue.containsMatchIn(ocr) || tfFalse.containsMatchIn(ocr)) return QuestionType.TF
@@ -206,21 +235,40 @@ object QuestionBank {
             return MatchResult(null, 0.0, null, null)
         }
 
+        // 界面题型标签(如 [单选])是硬信号，据此只在同类型题目中匹配
+        val label = detectTypeLabel(extractedText)
         val hint = detectTypeHint(extractedText)
-        Logger.i("QuestionBank", "detectTypeHint: $hint")
+        Logger.i("QuestionBank", "detectTypeLabel: $label, detectTypeHint: $hint")
 
-        val questionOnly = extractQuestionText(extractedText)
+        val body = stripTypeLabel(extractedText)
+        val questionOnly = extractQuestionText(body)
         val clean = normalize(questionOnly)
         Logger.i("QuestionBank", "extracted questionOnly len=${questionOnly.length}, clean len=${clean.length}")
 
-        val candidates = if (hint == QuestionType.TF)
-            questions.filter { classifyQuestion(it) == QuestionType.TF }
-        else
-            questions
-        Logger.i("QuestionBank", "candidate pool size: ${candidates.size}")
+        val candidates = when {
+            label != null -> questions.filter { classifyQuestion(it) == label }
+            hint == QuestionType.TF -> questions.filter { classifyQuestion(it) == QuestionType.TF }
+            else -> questions
+        }
+        Logger.i("QuestionBank", "candidate pool size: ${candidates.size} (label=$label)")
 
         var best: Question? = null
         var bestScore = 0.0
+
+        // 屏幕上实际显示的选项，用于区分题干高度相似、仅选项不同的题目
+        val screenOptions = parseOcrOptions(body).values.map { normalize(it) }.filter { it.isNotEmpty() }
+
+        /** 题库选项与屏幕选项的吻合程度，返回 0..1 */
+        fun optionMatchRatio(q: Question): Double {
+            if (screenOptions.isEmpty() || q.options.isEmpty()) return 0.0
+            var hit = 0
+            for (opt in q.options.values) {
+                val n = normalize(opt)
+                if (n.isEmpty()) continue
+                if (screenOptions.any { optionSimilarity(n, it) >= 0.75 }) hit++
+            }
+            return hit.toDouble() / q.options.size
+        }
 
         fun scoreAgainst(pool: List<Question>, src: String, applyHintWeight: Boolean, label: String) {
             for (q in pool) {
@@ -229,6 +277,8 @@ object QuestionBank {
                 if (applyHintWeight && hint != null && classifyQuestion(q) == hint) {
                     score *= 1.05
                 }
+                // 题干分数相近时，用选项吻合度拉开差距（题干重复题的关键）
+                score *= (1.0 + 0.35 * optionMatchRatio(q))
                 if (score > bestScore) {
                     bestScore = score
                     best = q
@@ -239,16 +289,18 @@ object QuestionBank {
 
         scoreAgainst(candidates, clean, applyHintWeight = true, label = "clean")
 
-        val threshold = if (hint == QuestionType.TF) 0.25 else 0.3
+        val effType = label ?: hint
+        val threshold = if (effType == QuestionType.TF) 0.25 else 0.3
         Logger.i("QuestionBank", "After clean: bestScore=$bestScore, threshold=$threshold")
 
         if (bestScore < threshold) {
-            val cleanFull = normalize(extractedText)
+            val cleanFull = normalize(body)
             scoreAgainst(candidates, cleanFull, applyHintWeight = true, label = "full")
             Logger.i("QuestionBank", "After full: bestScore=$bestScore")
         }
 
-        if (bestScore < threshold && hint == QuestionType.TF) {
+        // 界面已明确题型时不跨类型兜底，避免单选题匹配到多选题
+        if (bestScore < threshold && label == null && hint == QuestionType.TF) {
             val nonTf = questions.filter { classifyQuestion(it) != QuestionType.TF }
             scoreAgainst(nonTf, clean, applyHintWeight = false, label = "tf_fallback")
             Logger.i("QuestionBank", "After tf_fallback: bestScore=$bestScore")
