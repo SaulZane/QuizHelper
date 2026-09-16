@@ -31,4 +31,14 @@
         android:text="Recognizing..."
         android:textColor="#AAAAAA"
         android:textSize="12sp" />
+
+    <Button
+        android:id="@+id/btnFloating"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:layout_gravity="bottom|end"
+        android:layout_marginEnd="16dp"
+        android:layout_marginBottom="40dp"
+        android:text="开启悬浮球"
+        android:textSize="12sp" />
 </FrameLayout>

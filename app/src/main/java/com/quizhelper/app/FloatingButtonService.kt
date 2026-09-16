@@ -60,24 +60,55 @@ class FloatingButtonService : Service() {
     override fun onCreate() {
         super.onCreate()
         Logger.i("Service", "onCreate")
+        isRunning = true
         
         createNotificationChannel()
-        startForeground(1, NotificationCompat.Builder(this, CHANNEL_ID)
-            .setContentTitle("Quiz Helper")
-            .setContentText("悬浮按钮已启动")
-            .setSmallIcon(android.R.drawable.ic_menu_camera)
-            .setPriority(NotificationCompat.PRIORITY_LOW)
-            .build())
+        startAsForeground()
 
         windowManager = getSystemService(WINDOW_SERVICE) as WindowManager
         createFloatingButton()
         createEmergencyButton()
         
-        registerReceiver(permissionReceiver, IntentFilter(ACTION_PERMISSION_GRANTED), RECEIVER_NOT_EXPORTED)
+        // RECEIVER_NOT_EXPORTED 仅 API 33+ 可用，低版本直接调用会 NoSuchFieldError
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            registerReceiver(permissionReceiver, IntentFilter(ACTION_PERMISSION_GRANTED), Context.RECEIVER_NOT_EXPORTED)
+        } else {
+            @Suppress("UnspecifiedRegisterReceiverFlag")
+            registerReceiver(permissionReceiver, IntentFilter(ACTION_PERMISSION_GRANTED))
+        }
         
         if (MediaProjectionHolder.hasPermission) {
             Logger.i("Service", "Permission already exists, creating projection")
             createMediaProjection()
+        }
+    }
+
+    private fun buildNotification() = NotificationCompat.Builder(this, CHANNEL_ID)
+        .setContentTitle("Quiz Helper")
+        .setContentText("悬浮按钮已启动")
+        .setSmallIcon(android.R.drawable.ic_menu_camera)
+        .setPriority(NotificationCompat.PRIORITY_LOW)
+        .setOngoing(true)
+        .build()
+
+    /**
+     * targetSdk 34 起，使用 MediaProjection 的前台服务必须声明 mediaProjection 类型，
+     * 否则 startForeground 会抛 MissingForegroundServiceTypeException。
+     */
+    private fun startAsForeground() {
+        try {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                startForeground(
+                    NOTIF_ID,
+                    buildNotification(),
+                    android.content.pm.ServiceInfo.FOREGROUND_SERVICE_TYPE_MEDIA_PROJECTION
+                )
+            } else {
+                startForeground(NOTIF_ID, buildNotification())
+            }
+            Logger.i("Service", "startForeground OK")
+        } catch (e: Throwable) {
+            Logger.e("Service", "startForeground failed", e)
         }
     }
 
@@ -382,10 +413,20 @@ class FloatingButtonService : Service() {
         }
     }
 
+    override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
+        Logger.i("Service", "onStartCommand action=${intent?.action}")
+        if (intent?.action == ACTION_STOP) {
+            stopSelf()
+            return START_NOT_STICKY
+        }
+        return START_STICKY
+    }
+
     override fun onDestroy() {
         Logger.i("Service", "onDestroy")
+        isRunning = false
         handler.removeCallbacksAndMessages(null)
-        unregisterReceiver(permissionReceiver)
+        try { unregisterReceiver(permissionReceiver) } catch (_: Exception) {}
         cleanupDisplay()
         mediaProjection?.stop()
         mediaProjection = null
@@ -403,7 +444,14 @@ class FloatingButtonService : Service() {
     }
 
     companion object {
+        const val NOTIF_ID = 1
         const val CHANNEL_ID = "quiz_helper_fg"
         const val ACTION_PERMISSION_GRANTED = "com.quizhelper.app.PERMISSION_GRANTED"
+        const val ACTION_STOP = "com.quizhelper.app.STOP_SERVICE"
+
+        /** 悬浮球服务是否正在运行，供界面同步按钮状态 */
+        @JvmStatic
+        var isRunning: Boolean = false
+            private set
     }
 }

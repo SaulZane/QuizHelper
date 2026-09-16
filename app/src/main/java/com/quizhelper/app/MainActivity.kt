@@ -1,10 +1,15 @@
 package com.quizhelper.app
 
 import android.Manifest
+import android.content.Intent
 import android.content.pm.PackageManager
+import android.net.Uri
+import android.os.Build
+import android.provider.Settings
 import android.graphics.Bitmap
 import android.graphics.Matrix
 import android.os.Bundle
+import android.widget.Button
 import android.widget.TextView
 import android.widget.Toast
 import androidx.appcompat.app.AppCompatActivity
@@ -25,6 +30,7 @@ class MainActivity : AppCompatActivity() {
     private lateinit var previewView: PreviewView
     private lateinit var tvAnswer: TextView
     private lateinit var tvStatus: TextView
+    private lateinit var btnFloating: Button
 
     private var cameraProvider: ProcessCameraProvider? = null
     private var cameraExecutor: ExecutorService = Executors.newSingleThreadExecutor()
@@ -40,7 +46,19 @@ class MainActivity : AppCompatActivity() {
             previewView = findViewById(R.id.previewView)
             tvAnswer = findViewById(R.id.tvAnswer)
             tvStatus = findViewById(R.id.tvStatus)
+            btnFloating = findViewById(R.id.btnFloating)
             Logger.i("MainActivity", "findViewById done")
+
+            btnFloating.setOnClickListener { toggleFloatingService() }
+            refreshFloatingButton()
+
+            // Android 13+ 需要通知权限，否则前台服务通知不显示
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU &&
+                ContextCompat.checkSelfPermission(this, Manifest.permission.POST_NOTIFICATIONS)
+                    != PackageManager.PERMISSION_GRANTED) {
+                ActivityCompat.requestPermissions(
+                    this, arrayOf(Manifest.permission.POST_NOTIFICATIONS), REQUEST_CODE_NOTIFICATION)
+            }
 
             if (allPermissionsGranted()) {
                 startCamera()
@@ -50,6 +68,70 @@ class MainActivity : AppCompatActivity() {
         } catch (e: Throwable) {
             Logger.e("MainActivity", "FATAL in onCreate", e)
         }
+    }
+
+    /** 开启/关闭悬浮球服务，必要时先引导用户授予悬浮窗权限 */
+    private fun toggleFloatingService() {
+        if (FloatingButtonService.isRunning) {
+            stopService(Intent(this, FloatingButtonService::class.java))
+            Logger.i("MainActivity", "悬浮球服务已停止")
+            // 服务 onDestroy 是异步的，稍后再刷新按钮文案
+            btnFloating.postDelayed({ refreshFloatingButton() }, 300)
+            return
+        }
+
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M && !Settings.canDrawOverlays(this)) {
+            Toast.makeText(this, "请先授予「显示在其他应用上层」权限", Toast.LENGTH_LONG).show()
+            try {
+                startActivityForResult(
+                    Intent(Settings.ACTION_MANAGE_OVERLAY_PERMISSION,
+                        Uri.parse("package:$packageName")),
+                    REQUEST_CODE_OVERLAY)
+            } catch (e: Throwable) {
+                Logger.e("MainActivity", "无法打开悬浮窗权限设置", e)
+                Toast.makeText(this, "请到系统设置中手动开启悬浮窗权限", Toast.LENGTH_LONG).show()
+            }
+            return
+        }
+
+        startFloatingService()
+    }
+
+    private fun startFloatingService() {
+        try {
+            val intent = Intent(this, FloatingButtonService::class.java)
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                startForegroundService(intent)
+            } else {
+                startService(intent)
+            }
+            Logger.i("MainActivity", "悬浮球服务已启动")
+            btnFloating.postDelayed({ refreshFloatingButton() }, 300)
+            moveTaskToBack(true)   // 退到后台，方便在其它应用上使用悬浮球
+        } catch (e: Throwable) {
+            Logger.e("MainActivity", "启动悬浮球服务失败", e)
+            Toast.makeText(this, "启动失败: ${e.message}", Toast.LENGTH_LONG).show()
+        }
+    }
+
+    private fun refreshFloatingButton() {
+        btnFloating.text = if (FloatingButtonService.isRunning) "关闭悬浮球" else "开启悬浮球"
+    }
+
+    override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
+        super.onActivityResult(requestCode, resultCode, data)
+        if (requestCode == REQUEST_CODE_OVERLAY) {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M && Settings.canDrawOverlays(this)) {
+                startFloatingService()
+            } else {
+                Toast.makeText(this, "未获得悬浮窗权限", Toast.LENGTH_SHORT).show()
+            }
+        }
+    }
+
+    override fun onResume() {
+        super.onResume()
+        refreshFloatingButton()
     }
 
     private fun startCamera() {
@@ -177,5 +259,7 @@ class MainActivity : AppCompatActivity() {
     companion object {
         private val REQUIRED_PERMISSIONS = arrayOf(Manifest.permission.CAMERA)
         private const val REQUEST_CODE_PERMISSIONS = 10
+        private const val REQUEST_CODE_OVERLAY = 11
+        private const val REQUEST_CODE_NOTIFICATION = 12
     }
 }
