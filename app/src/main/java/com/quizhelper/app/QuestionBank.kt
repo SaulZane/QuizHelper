@@ -63,21 +63,39 @@ object QuestionBank {
     fun parseOcrOptions(ocr: String): Map<String, String> {
         val result = LinkedHashMap<String, String>()
         // 找出所有 "字母+分隔符" 的位置，相邻两个之间的内容即为该选项文本
-        val marker = Regex("""(?:^|[\n\r\s。？！；;，,(（【\[])([A-Ha-h])\s*[、.．。)）:：\]】]\s*""")
+        // 分隔符可能是标点(A、 A. A) A:)，也可能只是换行或空格(ML Kit 常把选项号与内容分行输出)
+        val marker = Regex("""(?:^|[\n\r])\s*[(（\[【]?([A-Ha-h])[)）\]】]?\s*(?:[、.．。)）:：,，]|\s)\s*""")
         val hits = marker.findAll(ocr).toList()
         for ((i, m) in hits.withIndex()) {
             val letter = m.groupValues[1].uppercase()
             if (result.containsKey(letter)) continue
             val start = m.range.last + 1
-            val end = if (i + 1 < hits.size) hits[i + 1].range.first else ocr.length
+            var end = if (i + 1 < hits.size) hits[i + 1].range.first else ocr.length
             if (start >= end) continue
-            val content = ocr.substring(start, end)
+
+            var content = ocr.substring(start, end)
+            // 选项文本一般只占一行；后续行多为界面按钮等噪声，只有当本行为空时才向后取
+            val firstLine = content.substringBefore('\n').trim()
+            if (firstLine.isNotEmpty()) content = firstLine
+
+            content = content
                 .trim()
                 .trim('、', '.', '．', '。', ')', '）', ':', '：', ',', '，', ';', '；')
                 .trim()
-            if (content.isNotEmpty()) result[letter] = content
+            if (content.isNotEmpty() && !isUiNoise(content)) result[letter] = content
         }
         return result
+    }
+
+    /** 常见答题界面的按钮/状态文案，不应被当作选项内容 */
+    private val UI_NOISE = listOf(
+        "提交", "下一题", "上一题", "确定", "取消", "答案", "解析", "收藏",
+        "本题", "已选", "未选", "继续", "交卷", "返回", "查看"
+    )
+
+    private fun isUiNoise(s: String): Boolean {
+        val t = s.trim()
+        return t.length <= 5 && UI_NOISE.any { t == it || t.startsWith(it) }
     }
 
     /**
@@ -145,22 +163,22 @@ object QuestionBank {
         return letters.joinToString("")
     }
 
-    /** 生成最终展示的答案字符串：优先按屏幕实际顺序给字母，并附上答案文本 */
+    /**
+     * 生成最终展示的答案：只返回选项号（如 "A"、"ABD"），不含选项内容与解析。
+     * 字母按屏幕上实际显示的顺序解析，选项乱序时也能给出正确的选项号；
+     * 解析不出屏幕选项时退回题库原始答案。
+     */
     @JvmStatic
     fun formatAnswer(q: Question, ocr: String): String {
         val resolved = resolveLettersByText(q, ocr)
-        val texts = if (q.answerTexts.isNotEmpty()) q.answerTexts
-                    else q.answer.mapNotNull { q.options[it.toString()] }
-        return when {
-            resolved != null -> {
-                if (resolved != q.answer) {
-                    Logger.i("QuestionBank", "选项乱序: 题库答案=${q.answer} -> 屏幕答案=$resolved")
-                }
-                if (texts.isEmpty()) resolved else "$resolved  ${texts.joinToString(" / ")}"
+        if (resolved != null) {
+            if (resolved != q.answer) {
+                Logger.i("QuestionBank", "选项乱序: 题库答案=${q.answer} -> 屏幕答案=$resolved")
             }
-            texts.isNotEmpty() -> texts.joinToString(" / ")   // 解析不到屏幕选项时只给文本，避免给错字母
-            else -> q.answer
+            return resolved
         }
+        Logger.i("QuestionBank", "未能解析屏幕选项，回退题库答案=${q.answer}")
+        return q.answer
     }
 
     @JvmStatic
