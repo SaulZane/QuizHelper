@@ -46,7 +46,7 @@ object QuestionBank {
 
     /** 判断题同义词组：屏幕上可能显示 是/否，也可能是 正确/错误、对/错、√/× */
     private val TF_TRUE = setOf("是", "正确", "对", "√", "对的", "正确的")
-    private val TF_FALSE = setOf("否", "错误", "错", "×", "x", "不对", "错误的")
+    private val TF_FALSE = setOf("否", "错误", "错", "×", "x", "不对", "错误的", "不正确", "不正确的")
 
     private fun tfGroupOf(s: String): Int {
         val t = normalize(s)
@@ -74,9 +74,12 @@ object QuestionBank {
             if (start >= end) continue
 
             var content = ocr.substring(start, end)
-            // 选项文本一般只占一行；后续行多为界面按钮等噪声，只有当本行为空时才向后取
-            val firstLine = content.substringBefore('\n').trim()
-            if (firstLine.isNotEmpty()) content = firstLine
+            // 长选项在真实界面上会被折成多行(实拍: 危险驾驶罪题 D 选项 30 字折成两行)，
+            // 旧实现只取首行会使选项只剩半截，与题库全文相似度跌破 0.45 而丢失该选项字母
+            // (ABD 变 AB)。改为: 取到下一个选项标记前的全部行，去掉尾部界面噪声行后顺序拼接。
+            val lines = content.split('\n').map { it.trim() }.filter { it.isNotEmpty() }.toMutableList()
+            while (lines.isNotEmpty() && isUiNoise(lines.last())) lines.removeAt(lines.size - 1)
+            content = lines.joinToString("")
 
             content = content
                 .trim()
@@ -90,11 +93,13 @@ object QuestionBank {
     /** 常见答题界面的按钮/状态文案，不应被当作选项内容 */
     private val UI_NOISE = listOf(
         "提交", "下一题", "上一题", "确定", "取消", "答案", "解析", "收藏",
-        "本题", "已选", "未选", "继续", "交卷", "返回", "查看"
+        "本题", "已选", "未选", "继续", "交卷", "返回", "查看",
+        "答题卡", "标记", "作答", "输入", "倒计时"
     )
 
     private fun isUiNoise(s: String): Boolean {
-        val t = s.trim()
+        // 实拍界面底部导航常带箭头 glyph: "← 上一题"、"下一题 →"
+        val t = s.trim().trim('←', '→', '‹', '›', '<', '>', '－', '-')
         return t.length <= 5 && UI_NOISE.any { t == it || t.startsWith(it) }
     }
 
@@ -199,8 +204,16 @@ object QuestionBank {
     fun detectTypeLabel(ocr: String): QuestionType? {
         // 只看开头部分，避免题干或选项里出现这些字造成误判
         val head = ocr.take(60)
-        val label = Regex("""[\[\【(（]?\s*(单选|多选|不定项|判断|是非)\s*(?:题)?\s*[\]\】)）]?""")
-            .find(head)?.groupValues?.get(1) ?: return null
+        // 真实界面的题型标签只有两种形态：
+        // ① 带括号包裹，如 [单选] 【多选题】 (判断)；
+        // ② 独立成行或行首紧跟题号，如 "多选题" 单独一行、"单选题 1、…"。
+        // 旧写法不要求括号也不要求行首，选项文字里出现「判断（Orient）」「判断肇事车辆…」
+        // 等词会把多选题误判成判断题，候选池被缩小到只剩判断题，导致本题永远匹配不上。
+        val bracketed = Regex("""[\[【(（]\s*(单选|多选|不定项|判断|是非)\s*(?:题)?\s*[\]】)）]""")
+            .find(head)?.groupValues?.get(1)
+        val lineStart = Regex("""(?m)^\s*(单选|多选|不定项|判断|是非)\s*(?:题)?\s*(?:$|\d|[、.．)）])""")
+            .find(head)?.groupValues?.get(1)
+        val label = bracketed ?: lineStart ?: return null
         return when (label) {
             "单选" -> QuestionType.SINGLE
             "多选", "不定项" -> QuestionType.MULTI
