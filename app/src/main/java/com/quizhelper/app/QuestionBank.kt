@@ -103,6 +103,9 @@ object QuestionBank {
      * （如「机动车」vs「非机动车」、「国家安全观」vs「总体国家安全观」），
      * 因此完全相等优先，子串不再短路为高分，并按长度差惩罚。
      */
+    /** 选项里的阿拉伯数字串，如 "1000米" -> ["1000"] */
+    private fun digitKey(s: String): List<String> = Regex("""\d+""").findAll(s).map { it.value }.toList()
+
     @JvmStatic
     fun optionSimilarity(answerText: String, screenText: String): Double {
         val a = normalize(answerText)
@@ -112,7 +115,14 @@ object QuestionBank {
         val lenRatio = minOf(a.length, b.length).toDouble() / maxOf(a.length, b.length)
         val base = maxOf(lcsRatio(a, b), bigramJaccard(a, b))
         // 长度差越大越可能是“子串型”干扰项，按比例压低得分
-        return base * lenRatio
+        var score = base * lenRatio
+        // 数字往往就是选项的全部语义（1000米/100米、30日/300日），而 bigram/LCS 会把它们判成
+        // 高度相似（"1000米"vs"100米"=0.80，越过0.75的选项吻合阈值），使 Q106 在 Q278 的屏幕上
+        // 拿到满分吻合度。数字串不一致时降权 ×0.2（0.80→0.16）。
+        val ka = digitKey(a)
+        val kb = digitKey(b)
+        if (ka.isNotEmpty() && kb.isNotEmpty() && ka != kb) score *= 0.2
+        return score
     }
 
     /**
@@ -289,8 +299,13 @@ object QuestionBank {
 
         scoreAgainst(candidates, clean, applyHintWeight = true, label = "clean")
 
-        val effType = label ?: hint
-        val threshold = if (effType == QuestionType.TF) 0.25 else 0.3
+        // 匹配阈值：真实界面下库内题的匹配分最低约 1.28（题干精确命中 + 选项吻合加权），
+        // 而「不在题库里」的题误匹配最高仅约 0.58，两者之间存在巨大空隙。
+        // 旧阈值 0.25/0.3 落在误匹配一侧，会把库外题自信地匹配成某道错题并给出错误答案
+        // （实测拍照回放：「什么是签证」→误匹配Q267 显示C、「2025年…根本保证是坚持以人民
+        //   为中心」→误匹配Q337）。取 0.8 后库内题全部保留（并为 OCR 噪声留足衰减余量），
+        // 库外题一律拒答，不再显示错误答案。
+        val threshold = 0.8
         Logger.i("QuestionBank", "After clean: bestScore=$bestScore, threshold=$threshold")
 
         if (bestScore < threshold) {
@@ -346,6 +361,9 @@ object QuestionBank {
     @JvmStatic
     fun computeSimilarity(a: String, b: String): Double {
         if (a.isEmpty() || b.isEmpty()) return 0.0
+        // 完全相同必须是最高分：否则「仅一两字之差」的近似题干（如"一级防护…"/"三级防护…"）
+        // 经 LCS 可得 0.97，反超包含关系给出的 0.95，导致 Q278 被匹配成 Q106 而答错。
+        if (a == b) return 1.0
         if (a.contains(b)) return 0.95
         if (b.contains(a)) return 0.9
         val lcsScore = lcsRatio(a, b)
